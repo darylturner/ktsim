@@ -15,16 +15,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary: ktsim
+            asset: ktsim-x86_64-linux
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary: ktsim
+            asset: ktsim-x86_64-macos
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary: ktsim
+            asset: ktsim-aarch64-macos
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: ktsim.exe
+            asset: ktsim-x86_64-windows.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -38,8 +38,13 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Rename binary
+        shell: bash
+        run: |
+          src="target/${{ matrix.target }}/release/ktsim${{ matrix.os == 'windows-latest' && '.exe' || '' }}"
+          cp "$src" "${{ matrix.asset }}"
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/${{ matrix.target }}/release/${{ matrix.binary }}
-          name: ${{ matrix.binary }}-${{ matrix.target }}
+          files: ${{ matrix.asset }}
