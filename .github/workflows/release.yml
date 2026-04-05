@@ -38,10 +38,6 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Sign binary (ad-hoc)
-        if: matrix.os == 'macos-latest'
-        run: codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime "target/${{ matrix.target }}/release/ktsim"
-
       - name: Rename binary
         shell: bash
         run: |
