@@ -99,6 +99,7 @@ struct WeaponRules {
     lethal: u8,
 }
 
+#[derive(Debug, PartialEq)]
 struct SimResult {
     misses: usize,
     normals: usize,
@@ -115,7 +116,7 @@ fn roll_d6(rng: &mut impl Rng) -> u8 {
     rng.gen_range(1..=6)
 }
 
-fn apply_reroll(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut impl Rng) {
+fn apply_rerolls(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut impl Rng) {
     match reroll {
         Reroll::None => {}
 
@@ -158,6 +159,44 @@ fn apply_reroll(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut impl
     }
 }
 
+fn classify_rolls(rolls: &[u8], threshold: u8, weapon_rules: &WeaponRules) -> SimResult {
+        let mut misses = 0;
+        let mut normals = 0;
+        let mut crits = 0;
+
+        for &v in rolls.iter() {
+            if v < threshold {
+                misses += 1;
+            } else if v >= weapon_rules.lethal {
+                crits += 1;
+            } else {
+                normals += 1;
+            }
+        }
+
+        // punishing: crit converts a miss to a normal
+        if weapon_rules.punishing && crits >= 1 && misses >= 1 {
+            misses -= 1;
+            normals += 1;
+        }
+        // rending: crit converts a normal to a crit
+        if weapon_rules.rending && crits >= 1 && normals >= 1 {
+            normals -= 1;
+            crits += 1;
+        }
+        // severe: no crits converts a normal to a crit (cannot trigger punishing or rending)
+        if weapon_rules.severe && crits == 0 && normals >= 1 {
+            normals -= 1;
+            crits += 1;
+        }
+
+        SimResult {
+            misses,
+            normals,
+            crits,
+        }
+}
+
 // simresult struct is 24 bytes so expect 24xsim bytes for memory usage
 // 10m simulations seems on the high side here so 240mB for the vec<simresult>
 fn simulate_rolls(
@@ -166,48 +205,13 @@ fn simulate_rolls(
     reroll: &Reroll,
     weapon_rules: &WeaponRules,
     sims: usize,
+    rng: &mut impl Rng,
 ) -> Vec<SimResult> {
-    let mut rng = rand::thread_rng();
     (0..sims)
         .map(|_| {
-            let mut rolls: Vec<u8> = (0..dice).map(|_| roll_d6(&mut rng)).collect();
-            apply_reroll(&mut rolls, threshold, reroll, &mut rng);
-
-            let mut misses = 0;
-            let mut normals = 0;
-            let mut crits = 0;
-
-            for &v in rolls.iter() {
-                if v < threshold {
-                    misses += 1;
-                } else if v >= weapon_rules.lethal {
-                    crits += 1;
-                } else {
-                    normals += 1;
-                }
-            }
-
-            // punishing: crit converts a miss to a normal
-            if weapon_rules.punishing && crits >= 1 && misses >= 1 {
-                misses -= 1;
-                normals += 1;
-            }
-            // rending: crit converts a normal to a crit
-            if weapon_rules.rending && crits >= 1 && normals >= 1 {
-                normals -= 1;
-                crits += 1;
-            }
-            // severe: no crits converts a normal to a crit (cannot trigger punishing or rending)
-            if weapon_rules.severe && crits == 0 && normals >= 1 {
-                normals -= 1;
-                crits += 1;
-            }
-
-            SimResult {
-                misses,
-                normals,
-                crits,
-            }
+            let mut rolls: Vec<u8> = (0..dice).map(|_| roll_d6(rng)).collect();
+            apply_rerolls(&mut rolls, threshold, reroll, rng);
+            classify_rolls(&rolls, threshold, weapon_rules)
         })
         .collect()
 }
@@ -396,6 +400,7 @@ fn main() {
         &args.reroll,
         &weapon_rules,
         args.sims,
+        &mut rand::thread_rng(),
     );
 
     print_results(
@@ -407,4 +412,184 @@ fn main() {
         args.sims,
         &args.output,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    // seeded with 8, our expected roll sequence for rerolls
+    // [4, 3, 6, 5, 4, 6, 4, 3, 5, 4]
+    fn seeded_rng() -> rand::rngs::StdRng {
+        rand::rngs::StdRng::seed_from_u64(8)
+    }
+
+    // fn print_seeded_roll_sequence() {
+    //     use rand::{SeedableRng, Rng};
+    //     let mut rng = rand::rngs::StdRng::seed_from_u64(8);
+    //     let rolls: Vec<u8> = (0..10).map(|_| rng.gen_range(1u8..=6)).collect();
+    //     println!("{:?}", rolls);
+    // }
+
+    #[test]
+    fn test_reroll_balanced() {
+        let mut rolls = vec![1, 1, 3, 4, 5];
+        apply_rerolls(&mut rolls, 3, &Reroll::Balanced, &mut seeded_rng());
+        assert_eq!(rolls, vec![4, 1, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_reroll_ceaseless() {
+        let mut rolls = vec![1, 1, 2, 4, 5];
+        apply_rerolls(&mut rolls, 3, &Reroll::Ceaseless, &mut seeded_rng());
+        assert_eq!(rolls, vec![4, 3, 2, 4, 5]);
+    }
+
+    #[test]
+    fn test_reroll_relentless() {
+        let mut rolls = vec![1, 1, 2, 4, 5];
+        apply_rerolls(&mut rolls, 3, &Reroll::Relentless, &mut seeded_rng());
+        assert_eq!(rolls, vec![4, 3, 6, 4, 5]);
+    }
+
+    #[test]
+    fn test_classify_no_special() {
+        let rolls = vec![1, 1, 2, 4, 6];
+        let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 6};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 3,
+            normals: 1,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 2);
+    }
+
+    #[test]
+    fn test_classify_punishing() {
+        let rolls = vec![1, 1, 2, 4, 6];
+        let special = WeaponRules{punishing: true, rending: false, severe: false, lethal: 6};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 2,
+            normals: 2,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 3);
+    }
+
+    #[test]
+    fn test_classify_rending() {
+        let rolls = vec![1, 1, 3, 4, 6];
+        let special = WeaponRules{punishing: false, rending: true, severe: false, lethal: 6};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 2,
+            normals: 1,
+            crits: 2,
+        });
+
+        assert!(result.hits() == 3);
+    }
+
+    #[test]
+    fn test_classify_lethal() {
+        let rolls = vec![1, 1, 3, 5, 6];
+        let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 5};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 2,
+            normals: 1,
+            crits: 2,
+        });
+
+        assert!(result.hits() == 3);
+    }
+
+    #[test]
+    fn test_classify_severe() {
+        let rolls = vec![1, 1, 3, 5, 5];
+        let special = WeaponRules{punishing: false, rending: false, severe: true, lethal: 6};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 2,
+            normals: 2,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 3);
+    }
+
+    #[test]
+    fn test_classify_severe_with_critical() {
+        let rolls = vec![1, 1, 3, 5, 6];
+        let special = WeaponRules{punishing: false, rending: false, severe: true, lethal: 6};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 2,
+            normals: 2,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 3);
+    }
+
+    #[test]
+    fn test_classify_severe_rending() {
+        let rolls = vec![1, 1, 3, 5, 5];
+        let special = WeaponRules{punishing: false, rending: true, severe: true, lethal: 6};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 2,
+            normals: 2,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 3);
+    }
+   
+    #[test]
+    fn test_classify_severe_punishing() {
+        let rolls = vec![1, 1, 3, 5, 5];
+        let special = WeaponRules{punishing: true, rending: false, severe: true, lethal: 6};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 2,
+            normals: 2,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 3);
+    }
+
+    #[test]
+    fn test_classify_lethal_rending() {
+        let rolls = vec![1, 3, 3, 5, 5];
+        let special = WeaponRules{punishing: false, rending: true, severe: false, lethal: 5};
+        let result = classify_rolls(&rolls, 3, &special);
+        assert_eq!(result, SimResult{
+            misses: 1,
+            normals: 1,
+            crits: 3,
+        });
+
+        assert!(result.hits() == 4);
+    }
+
+    // [4, 3], [6, 5], [4, 6], [4, 3], [5, 4]
+    #[test]
+    fn test_simulate_rolls() {
+        let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 6};
+        let result = simulate_rolls(2, 4, &Reroll::None, &special, 5, &mut seeded_rng());
+        assert_eq!(result, vec![
+            SimResult{ misses: 1, normals: 1, crits: 0, },
+            SimResult{ misses: 0, normals: 1, crits: 1, },
+            SimResult{ misses: 0, normals: 1, crits: 1, },
+            SimResult{ misses: 1, normals: 1, crits: 0, },
+            SimResult{ misses: 0, normals: 2, crits: 0, },
+        ]);
+    }
 }
