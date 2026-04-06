@@ -48,7 +48,7 @@ ktsim [OPTIONS]
 
 ### Special rules interaction
 
-Punishing, rending, and severe are applied in that order after rerolls. Severe only fires when there are no criticals, so it cannot trigger punishing or rending. Accurate dice are retained before rerolls and are not subject to weapon effects.
+Punishing, rending, and severe are applied in that order after rerolls. Severe only fires when there are no criticals, so it cannot trigger punishing or rending. Accurate dice are retained before rolls/rerolls and cannot be altered by weapon effects.
 
 ## Output
 
