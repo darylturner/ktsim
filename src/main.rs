@@ -1,4 +1,4 @@
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use rand::Rng;
 use std::collections::HashMap;
 
@@ -34,14 +34,29 @@ dX.    9Xb      .dXb    __                         __    dXb.     dXP     .Xb
                                `             '
 "#
 )]
-struct Args {
-    /// Number of d6 dice to roll
-    #[arg(short, long, default_value_t = 4)]
-    dice: usize,
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
 
-    /// Success threshold — roll this value or higher to hit (2–6)
-    #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(2..=6))]
-    threshold: u8,
+#[derive(Subcommand)]
+enum Command {
+    /// Simulate an attack roll
+    Attack(AttackArgs),
+    /// Simulate a defence roll
+    Defence(DefenceArgs),
+}
+
+#[derive(Args)]
+#[command(disable_help_flag = true)]
+struct AttackArgs {
+    /// Number of attack dice
+    #[arg(short = 'a', long, default_value_t = 4)]
+    attacks: usize,
+
+    /// Hit threshold — roll this value or higher to hit (2–6)
+    #[arg(short = 'h', long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(2..=6))]
+    hit: u8,
 
     /// Reroll ability
     #[arg(short, long, value_enum, default_value_t = Reroll::None)]
@@ -62,6 +77,44 @@ struct Args {
     /// Severe: if no criticals are rolled, convert one normal hit to a critical (cannot trigger punishing or rending)
     #[arg(long, default_value_t = false)]
     severe: bool,
+
+    /// Accurate: number of dice automatically retained as normal hits (unaffected by special rules)
+    #[arg(long, default_value_t = 0)]
+    accurate: usize,
+
+    /// Number of simulations
+    #[arg(short, long, default_value_t = 10_000)]
+    sims: usize,
+
+    /// Output format
+    #[arg(short, long, value_enum, default_value_t = Output::Hits)]
+    output: Output,
+
+    #[arg(long, action = clap::ArgAction::Help)]
+    help: Option<bool>,
+}
+
+#[derive(Args)]
+struct DefenceArgs {
+    /// Number of save dice
+    #[arg(long, default_value_t = 3)]
+    saves: usize,
+
+    /// Save characteristic — roll this value or higher to save (2–6)
+    #[arg(short = 'S', long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(2..=6))]
+    save: u8,
+
+    /// Retained normal saves — reduces the rolled dice pool
+    #[arg(long, default_value_t = 0)]
+    retained_normals: usize,
+
+    /// Retained critical saves — reduces the rolled dice pool
+    #[arg(long, default_value_t = 0)]
+    retained_crits: usize,
+
+    /// Reroll ability
+    #[arg(short, long, value_enum, default_value_t = Reroll::None)]
+    reroll: Reroll,
 
     /// Number of simulations
     #[arg(short, long, default_value_t = 10_000)]
@@ -90,6 +143,11 @@ enum Reroll {
     Ceaseless,
     /// Reroll all misses
     Relentless,
+}
+
+struct Retain {
+    normals: usize,
+    crits: usize,
 }
 
 struct WeaponRules {
@@ -159,72 +217,98 @@ fn apply_rerolls(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut imp
     }
 }
 
-fn classify_rolls(rolls: &[u8], threshold: u8, weapon_rules: &WeaponRules) -> SimResult {
-        let mut misses = 0;
-        let mut normals = 0;
-        let mut crits = 0;
+fn classify_rolls(rolls: &[u8], threshold: u8, weapon_rules: Option<&WeaponRules>) -> SimResult {
+    let lethal = weapon_rules.map_or(6, |r| r.lethal);
+    let mut misses = 0;
+    let mut normals = 0;
+    let mut crits = 0;
 
-        for &v in rolls.iter() {
-            if v < threshold {
-                misses += 1;
-            } else if v >= weapon_rules.lethal {
-                crits += 1;
-            } else {
-                normals += 1;
-            }
+    for &v in rolls.iter() {
+        if v < threshold {
+            misses += 1;
+        } else if v >= lethal {
+            crits += 1;
+        } else {
+            normals += 1;
         }
+    }
 
+    if let Some(rules) = weapon_rules {
         // punishing: crit converts a miss to a normal
-        if weapon_rules.punishing && crits >= 1 && misses >= 1 {
+        if rules.punishing && crits >= 1 && misses >= 1 {
             misses -= 1;
             normals += 1;
         }
         // rending: crit converts a normal to a crit
-        if weapon_rules.rending && crits >= 1 && normals >= 1 {
+        if rules.rending && crits >= 1 && normals >= 1 {
             normals -= 1;
             crits += 1;
         }
         // severe: no crits converts a normal to a crit (cannot trigger punishing or rending)
-        if weapon_rules.severe && crits == 0 && normals >= 1 {
+        if rules.severe && crits == 0 && normals >= 1 {
             normals -= 1;
             crits += 1;
         }
+    }
 
-        SimResult {
-            misses,
-            normals,
-            crits,
-        }
+    SimResult { misses, normals, crits }
 }
 
 // simresult struct is 24 bytes so expect 24xsim bytes for memory usage
 // 10m simulations seems on the high side here so 240mB for the vec<simresult>
 fn simulate_rolls(
-    dice: usize,
+    attacks: usize,
     threshold: u8,
     reroll: &Reroll,
     weapon_rules: &WeaponRules,
+    retain: &Retain,
     sims: usize,
     rng: &mut impl Rng,
 ) -> Vec<SimResult> {
+    let dice = attacks.saturating_sub(retain.normals + retain.crits);
     (0..sims)
         .map(|_| {
             let mut rolls: Vec<u8> = (0..dice).map(|_| roll_d6(rng)).collect();
             apply_rerolls(&mut rolls, threshold, reroll, rng);
-            classify_rolls(&rolls, threshold, weapon_rules)
+            let mut result = classify_rolls(&rolls, threshold, Some(weapon_rules));
+            result.normals += retain.normals;
+            result.crits += retain.crits;
+            result
         })
         .collect()
 }
 
-fn print_results(
-    results: &[SimResult],
-    dice: usize,
+fn simulate_defence(
+    saves: usize,
     threshold: u8,
     reroll: &Reroll,
-    weapon_rules: &WeaponRules,
+    retain: &Retain,
     sims: usize,
-    output: &Output,
-) {
+    rng: &mut impl Rng,
+) -> Vec<SimResult> {
+    let dice = saves.saturating_sub(retain.normals + retain.crits);
+    (0..sims)
+        .map(|_| {
+            let mut rolls: Vec<u8> = (0..dice).map(|_| roll_d6(rng)).collect();
+            apply_rerolls(&mut rolls, threshold, reroll, rng);
+            let mut result = classify_rolls(&rolls, threshold, None);
+            result.normals += retain.normals;
+            result.crits += retain.crits;
+            result
+        })
+        .collect()
+}
+
+fn reroll_label(reroll: &Reroll) -> &'static str {
+    match reroll {
+        Reroll::None => "None",
+        Reroll::Balanced => "Balanced (reroll 1 miss)",
+        Reroll::Ceaseless => "Ceaseless (reroll largest group of misses)",
+        Reroll::Relentless => "Relentless (reroll all misses)",
+    }
+}
+
+fn print_stats(results: &[SimResult], total_dice: usize, hit_label: &str, output: &Output) {
     let total = results.len() as f64;
 
     let mean_crits = results.iter().map(|r| r.crits).sum::<usize>() as f64 / total;
@@ -248,37 +332,58 @@ fn print_results(
     sorted_hits.sort_unstable();
     let median = sorted_hits[results.len() / 2];
 
-    let reroll_label = match reroll {
-        Reroll::None => "None",
-        Reroll::Balanced => "Balanced (reroll 1 miss)",
-        Reroll::Ceaseless => "Ceaseless (reroll largest group of misses)",
-        Reroll::Relentless => "Relentless (reroll all misses)",
-    };
-
     println!();
-    println!("{}", "=".repeat(WIDTH));
-    println!("  Kill Team Dice Simulator — Results");
-    println!("{}", "=".repeat(WIDTH));
-    println!("  Dice        : {}d6", dice);
-    println!("  Threshold   : {}+ to hit", threshold);
-    println!("  Lethal      : {}+ for critical", weapon_rules.lethal);
-    println!("  Punishing   : {}", if weapon_rules.punishing { "Yes" } else { "No" });
-    println!("  Rending     : {}", if weapon_rules.rending { "Yes" } else { "No" });
-    println!("  Severe      : {}", if weapon_rules.severe { "Yes" } else { "No" });
-    println!("  Rerolls     : {}", reroll_label);
-    println!("  Simulations : {}", format_num(sims));
-    println!("{}", "=".repeat(WIDTH));
-    println!();
-    println!("  Mean hits   : {:.3}  ({:.3} normal + {:.3} crit)", mean_hits, mean_normals, mean_crits);
+    println!("  Mean {}  : {:.3}  ({:.3} normal + {:.3} crit)", hit_label, mean_hits, mean_normals, mean_crits);
     println!("  Mean misses : {:.3}", mean_misses);
-    println!("  Median hits : {}", median);
+    println!("  Median {}  : {}", hit_label, median);
     println!("  Std dev     : {:.3}", std_dev);
     println!("  Range       : {} – {}", sorted_hits.first().unwrap(), sorted_hits.last().unwrap());
 
     match output {
-        Output::Hits => print_hits_table(dice, &hit_counts, total, mean_hits),
-        Output::Full => print_breakdown_table(results, dice, &hit_counts, total),
+        Output::Hits => print_hits_table(total_dice, &hit_counts, total, mean_hits, hit_label),
+        Output::Full => print_breakdown_table(results, total_dice, &hit_counts, total),
     }
+}
+
+fn print_attack_results(
+    results: &[SimResult],
+    args: &AttackArgs,
+    weapon_rules: &WeaponRules,
+) {
+    println!();
+    println!("{}", "=".repeat(WIDTH));
+    println!("  Kill Team Dice Simulator — Attack");
+    println!("{}", "=".repeat(WIDTH));
+    println!("  Attacks     : {}", args.attacks);
+    println!("  Hit         : {}+", args.hit);
+    println!("  Lethal      : {}+", weapon_rules.lethal);
+    println!("  Accurate    : {}", args.accurate);
+    println!("  Punishing   : {}", if weapon_rules.punishing { "Yes" } else { "No" });
+    println!("  Rending     : {}", if weapon_rules.rending { "Yes" } else { "No" });
+    println!("  Severe      : {}", if weapon_rules.severe { "Yes" } else { "No" });
+    println!("  Rerolls     : {}", reroll_label(&args.reroll));
+    println!("  Simulations : {}", format_num(args.sims));
+    println!("{}", "=".repeat(WIDTH));
+
+    print_stats(results, args.attacks, "hits", &args.output);
+}
+
+fn print_defence_results(
+    results: &[SimResult],
+    args: &DefenceArgs,
+) {
+    println!();
+    println!("{}", "=".repeat(WIDTH));
+    println!("  Kill Team Dice Simulator — Defence");
+    println!("{}", "=".repeat(WIDTH));
+    println!("  Save Dice   : {}", args.saves);
+    println!("  Save        : {}+", args.save);
+    println!("  Retained    : {} normal, {} critical", args.retained_normals, args.retained_crits);
+    println!("  Rerolls     : {}", reroll_label(&args.reroll));
+    println!("  Simulations : {}", format_num(args.sims));
+    println!("{}", "=".repeat(WIDTH));
+
+    print_stats(results, args.saves, "saves", &args.output);
 }
 
 fn make_bar(count: usize, max_count: usize, width: usize) -> String {
@@ -290,6 +395,7 @@ fn print_hits_table(
     hit_counts: &HashMap<usize, usize>,
     total: f64,
     mean_hits: f64,
+    label: &str,
 ) {
     let max_count = *hit_counts.values().max().unwrap_or(&1);
 
@@ -297,7 +403,7 @@ fn print_hits_table(
     println!("{}", "─".repeat(WIDTH));
     println!(
         "  {:<6} {:<9} {:>6}   {:>6}   {}",
-        "Hits", "Count", "Prob", "≥ Prob", "Distribution"
+        label, "Count", "Prob", "≥ Prob", "Distribution"
     );
     println!("{}", "─".repeat(WIDTH));
 
@@ -385,33 +491,40 @@ fn format_num(n: usize) -> String {
 }
 
 fn main() {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
-    let weapon_rules = WeaponRules {
-        punishing: args.punishing,
-        rending: args.rending,
-        severe: args.severe,
-        lethal: args.lethal,
-    };
+    match cli.command {
+        Command::Attack(args) => {
+            let weapon_rules = WeaponRules {
+                punishing: args.punishing,
+                rending: args.rending,
+                severe: args.severe,
+                lethal: args.lethal,
+            };
+            let results = simulate_rolls(
+                args.attacks,
+                args.hit,
+                &args.reroll,
+                &weapon_rules,
+                &Retain { normals: args.accurate, crits: 0 },
+                args.sims,
+                &mut rand::thread_rng(),
+            );
+            print_attack_results(&results, &args, &weapon_rules);
+        }
 
-    let results = simulate_rolls(
-        args.dice,
-        args.threshold,
-        &args.reroll,
-        &weapon_rules,
-        args.sims,
-        &mut rand::thread_rng(),
-    );
-
-    print_results(
-        &results,
-        args.dice,
-        args.threshold,
-        &args.reroll,
-        &weapon_rules,
-        args.sims,
-        &args.output,
-    );
+        Command::Defence(args) => {
+            let results = simulate_defence(
+                args.saves,
+                args.save,
+                &args.reroll,
+                &Retain { normals: args.retained_normals, crits: args.retained_crits },
+                args.sims,
+                &mut rand::thread_rng(),
+            );
+            print_defence_results(&results, &args);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -457,7 +570,7 @@ mod tests {
     fn test_classify_no_special() {
         let rolls = vec![1, 1, 2, 4, 6];
         let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 6};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 3,
             normals: 1,
@@ -471,7 +584,7 @@ mod tests {
     fn test_classify_punishing() {
         let rolls = vec![1, 1, 2, 4, 6];
         let special = WeaponRules{punishing: true, rending: false, severe: false, lethal: 6};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 2,
             normals: 2,
@@ -485,7 +598,7 @@ mod tests {
     fn test_classify_rending() {
         let rolls = vec![1, 1, 3, 4, 6];
         let special = WeaponRules{punishing: false, rending: true, severe: false, lethal: 6};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 2,
             normals: 1,
@@ -499,7 +612,7 @@ mod tests {
     fn test_classify_lethal() {
         let rolls = vec![1, 1, 3, 5, 6];
         let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 5};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 2,
             normals: 1,
@@ -513,7 +626,7 @@ mod tests {
     fn test_classify_severe() {
         let rolls = vec![1, 1, 3, 5, 5];
         let special = WeaponRules{punishing: false, rending: false, severe: true, lethal: 6};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 2,
             normals: 2,
@@ -527,7 +640,7 @@ mod tests {
     fn test_classify_severe_with_critical() {
         let rolls = vec![1, 1, 3, 5, 6];
         let special = WeaponRules{punishing: false, rending: false, severe: true, lethal: 6};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 2,
             normals: 2,
@@ -541,7 +654,7 @@ mod tests {
     fn test_classify_severe_rending() {
         let rolls = vec![1, 1, 3, 5, 5];
         let special = WeaponRules{punishing: false, rending: true, severe: true, lethal: 6};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 2,
             normals: 2,
@@ -550,12 +663,12 @@ mod tests {
 
         assert!(result.hits() == 3);
     }
-   
+
     #[test]
     fn test_classify_severe_punishing() {
         let rolls = vec![1, 1, 3, 5, 5];
         let special = WeaponRules{punishing: true, rending: false, severe: true, lethal: 6};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 2,
             normals: 2,
@@ -569,7 +682,7 @@ mod tests {
     fn test_classify_lethal_rending() {
         let rolls = vec![1, 3, 3, 5, 5];
         let special = WeaponRules{punishing: false, rending: true, severe: false, lethal: 5};
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, Some(&special));
         assert_eq!(result, SimResult{
             misses: 1,
             normals: 1,
@@ -579,11 +692,22 @@ mod tests {
         assert!(result.hits() == 4);
     }
 
+    #[test]
+    fn test_simulate_accurate() {
+        // accurate=2: roll 3 dice, retain 2 as normals after classify
+        // rending fires on rolled dice only, then accurate normals are added
+        // seed 8 first roll: [4, 3, 6] → miss=1(3<3? no, 3>=3), wait threshold=3
+        // [4,3,6] threshold 3: 4=normal, 3=normal, 6=crit → rending: normal=1,crit=2 → +2 normals → normal=3,crit=2
+        let special = WeaponRules{punishing: false, rending: true, severe: false, lethal: 6};
+        let result = simulate_rolls(5, 3, &Reroll::None, &special, &Retain{ normals: 2, crits: 0 }, 1, &mut seeded_rng());
+        assert_eq!(result, vec![SimResult{ misses: 0, normals: 3, crits: 2 }]);
+    }
+
     // [4, 3], [6, 5], [4, 6], [4, 3], [5, 4]
     #[test]
     fn test_simulate_rolls() {
         let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 6};
-        let result = simulate_rolls(2, 4, &Reroll::None, &special, 5, &mut seeded_rng());
+        let result = simulate_rolls(2, 4, &Reroll::None, &special, &Retain{ normals: 0, crits: 0 }, 5, &mut seeded_rng());
         assert_eq!(result, vec![
             SimResult{ misses: 1, normals: 1, crits: 0, },
             SimResult{ misses: 0, normals: 1, crits: 1, },
