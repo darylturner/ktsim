@@ -37,11 +37,11 @@ dX.    9Xb      .dXb    __                         __    dXb.     dXP     .Xb
 struct Args {
     /// Number of d6 dice to roll
     #[arg(short, long, default_value_t = 4)]
-    dice: usize,
+    attacks: usize,
 
-    /// Success threshold — roll this value or higher to hit (2–6)
-    #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(2..=6))]
-    threshold: u8,
+    /// Roll this value or higher to hit (2–6)
+    #[arg(short = 'H', long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(2..=6))]
+    hit: u8,
 
     /// Reroll ability
     #[arg(short, long, value_enum, default_value_t = Reroll::None)]
@@ -104,6 +104,7 @@ struct WeaponRules {
     accurate: u8,
 }
 
+#[cfg(test)]
 impl WeaponRules {
     fn new() -> Self {
         WeaponRules { punishing: false, rending: false, severe: false, lethal: 6, accurate: 0 }
@@ -127,13 +128,13 @@ fn roll_d6(rng: &mut impl Rng) -> u8 {
     rng.gen_range(1..=6)
 }
 
-fn apply_rerolls(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut impl Rng) {
+fn apply_rerolls(rolls: &mut [u8], hit: u8, reroll: &Reroll, rng: &mut impl Rng) {
     match reroll {
         Reroll::None => {}
 
         Reroll::Balanced => {
             // reroll the first missed die
-            if let Some(pos) = rolls.iter().position(|&v| v < threshold) {
+            if let Some(pos) = rolls.iter().position(|&v| v < hit) {
                 rolls[pos] = roll_d6(rng);
             }
         }
@@ -142,7 +143,7 @@ fn apply_rerolls(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut imp
             // reroll the largest group of misses (most frequent missed value)
             let mut freq: HashMap<u8, usize> = HashMap::new();
             for &v in rolls.iter() {
-                if v < threshold {
+                if v < hit {
                     *freq.entry(v).or_insert(0) += 1;
                 }
             }
@@ -162,7 +163,7 @@ fn apply_rerolls(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut imp
         Reroll::Relentless => {
             // reroll every miss
             for v in rolls.iter_mut() {
-                if *v < threshold {
+                if *v < hit {
                     *v = roll_d6(rng);
                 }
             }
@@ -170,13 +171,13 @@ fn apply_rerolls(rolls: &mut [u8], threshold: u8, reroll: &Reroll, rng: &mut imp
     }
 }
 
-fn classify_rolls(rolls: &[u8], threshold: u8, weapon_rules: &WeaponRules) -> SimResult {
+fn classify_rolls(rolls: &[u8], hit: u8, weapon_rules: &WeaponRules) -> SimResult {
         let mut misses = 0;
         let mut normals = 0;
         let mut crits = 0;
 
         for &v in rolls.iter() {
-            if v < threshold {
+            if v < hit {
                 misses += 1;
             } else if v >= weapon_rules.lethal {
                 crits += 1;
@@ -211,8 +212,8 @@ fn classify_rolls(rolls: &[u8], threshold: u8, weapon_rules: &WeaponRules) -> Si
 // simresult struct is 24 bytes so expect 24xsim bytes for memory usage
 // 10m simulations seems on the high side here so 240mB for the vec<simresult>
 fn simulate_rolls(
-    dice: usize,
-    threshold: u8,
+    attacks: usize,
+    hit: u8,
     reroll: &Reroll,
     weapon_rules: &WeaponRules,
     sims: usize,
@@ -221,15 +222,15 @@ fn simulate_rolls(
     (0..sims)
         .map(|_| {
             // remove retained dice from the dice pool
-            let minus_retained = dice.saturating_sub(weapon_rules.accurate.into());
+            let minus_retained = attacks.saturating_sub(weapon_rules.accurate.into());
 
             // roll and rerolls
             let mut rolls: Vec<u8> = (0..minus_retained).map(|_| roll_d6(rng)).collect();
-            apply_rerolls(&mut rolls, threshold, reroll, rng);
+            apply_rerolls(&mut rolls, hit, reroll, rng);
 
             // apply weapon rules to the pool of rolled dice
             // weapon effects usually shoudln't alter retained dice according to the faq
-            let mut result = classify_rolls(&rolls, threshold, weapon_rules);
+            let mut result = classify_rolls(&rolls, hit, weapon_rules);
 
             // add retained dice back to the final result
             result.normals += weapon_rules.accurate as usize;
@@ -240,8 +241,8 @@ fn simulate_rolls(
 
 fn print_results(
     results: &[SimResult],
-    dice: usize,
-    threshold: u8,
+    attacks: usize,
+    hit: u8,
     reroll: &Reroll,
     weapon_rules: &WeaponRules,
     sims: usize,
@@ -281,8 +282,8 @@ fn print_results(
     println!("{}", "=".repeat(WIDTH));
     println!("  Kill Team Dice Simulator — Results");
     println!("{}", "=".repeat(WIDTH));
-    println!("  Dice        : {}d6", dice);
-    println!("  Threshold   : {}+ to hit", threshold);
+    println!("  Attacks     : {}", attacks);
+    println!("  Hit         : {}+", hit);
     println!("  Lethal      : {}+ for critical", weapon_rules.lethal);
     println!("  Punishing   : {}", if weapon_rules.punishing { "Yes" } else { "No" });
     println!("  Rending     : {}", if weapon_rules.rending { "Yes" } else { "No" });
@@ -299,8 +300,8 @@ fn print_results(
     println!("  Range       : {} – {}", sorted_hits.first().unwrap(), sorted_hits.last().unwrap());
 
     match output {
-        Output::Hits => print_hits_table(dice, &hit_counts, total, mean_hits),
-        Output::Full => print_breakdown_table(results, dice, &hit_counts, total),
+        Output::Hits => print_hits_table(attacks, &hit_counts, total, mean_hits),
+        Output::Full => print_breakdown_table(results, attacks, &hit_counts, total),
     }
 }
 
@@ -309,7 +310,7 @@ fn make_bar(count: usize, max_count: usize, width: usize) -> String {
 }
 
 fn print_hits_table(
-    dice: usize,
+    attacks: usize,
     hit_counts: &HashMap<usize, usize>,
     total: f64,
     mean_hits: f64,
@@ -324,10 +325,10 @@ fn print_hits_table(
     );
     println!("{}", "─".repeat(WIDTH));
 
-    for s in 0..=dice {
+    for s in 0..=attacks {
         let count = hit_counts.get(&s).copied().unwrap_or(0);
         let prob = count as f64 / total;
-        let cum_prob = (s..=dice)
+        let cum_prob = (s..=attacks)
             .map(|k| hit_counts.get(&k).copied().unwrap_or(0))
             .sum::<usize>() as f64
             / total;
@@ -349,7 +350,7 @@ fn print_hits_table(
 
 fn print_breakdown_table(
     results: &[SimResult],
-    dice: usize,
+    attacks: usize,
     hit_counts: &HashMap<usize, usize>,
     total: f64,
 ) {
@@ -377,9 +378,9 @@ fn print_breakdown_table(
 
     for &((crits, normals), count) in combos.iter() {
         let hits = crits + normals;
-        let misses = dice - hits;
+        let misses = attacks - hits;
         let prob = count as f64 / total;
-        let cum_prob = (hits..=dice)
+        let cum_prob = (hits..=attacks)
             .map(|k| hit_counts.get(&k).copied().unwrap_or(0))
             .sum::<usize>() as f64
             / total;
@@ -419,8 +420,8 @@ fn main() {
     };
 
     let results = simulate_rolls(
-        args.dice,
-        args.threshold,
+        args.attacks,
+        args.hit,
         &args.reroll,
         &weapon_rules,
         args.sims,
@@ -429,8 +430,8 @@ fn main() {
 
     print_results(
         &results,
-        args.dice,
-        args.threshold,
+        args.attacks,
+        args.hit,
         &args.reroll,
         &weapon_rules,
         args.sims,

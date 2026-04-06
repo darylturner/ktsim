@@ -26,8 +26,8 @@ ktsim [OPTIONS]
 
 | Flag            | Short | Default | Description                                                  |
 |-----------------|-------|---------|--------------------------------------------------------------|
-| `--dice N`      | `-d`  | 4       | Number of d6 dice to roll                                    |
-| `--threshold N` | `-t`  | 3       | Roll this value or higher to hit (2–6)                       |
+| `--attacks N`   | `-a`  | 4       | Attack characteristic of the weapon                          |
+| `--hit N`       | `-H`  | 3       | Hit characteristic of the weapon (2–6)                       |
 | `--lethal N`    | `-l`  | 6       | Roll this value or higher for a critical hit (2–6)           |
 | `--reroll TYPE` | `-r`  | none    | Reroll ability (see below)                                   |
 | `--punishing`   |       | off     | If any critical rolled, convert one miss to a normal hit     |
@@ -81,19 +81,19 @@ Shows every unique combination of crits, normals, and misses with its probabilit
 
 ## Examples
 
-4 dice, 3+ to hit, balanced reroll:
+4 attacks, 3+ to hit, balanced reroll:
 ```
-ktsim -d 4 -t 3 -r balanced
-```
-
-5 dice, 4+ to hit, lethal 5, relentless rerolls:
-```
-ktsim -d 5 -t 4 -l 5 -r relentless
+ktsim -a 4 -H 3 -r balanced
 ```
 
-4 dice, 3+ to hit, rending and punishing, full breakdown:
+5 attacks, 4+ to hit, lethal 5, relentless rerolls:
 ```
-ktsim -d 4 -t 3 --rending --punishing -o full
+ktsim -a 5 -H 4 -l 5 -r relentless
+```
+
+4 attacks, 3+ to hit, rending and punishing, full breakdown:
+```
+ktsim -a 4 -H 3 --rending --punishing -o full
 ```
 
 ## Credits
