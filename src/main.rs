@@ -63,6 +63,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     severe: bool,
 
+    /// Accurate: remove N dice from the rolled pool to retain as normal success
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=2))]
+    accurate: u8,
+
     /// Number of simulations
     #[arg(short, long, default_value_t = 10_000)]
     sims: usize,
@@ -97,6 +101,13 @@ struct WeaponRules {
     rending: bool,
     severe: bool,
     lethal: u8,
+    accurate: u8,
+}
+
+impl WeaponRules {
+    fn new() -> Self {
+        WeaponRules { punishing: false, rending: false, severe: false, lethal: 6, accurate: 0 }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -209,9 +220,20 @@ fn simulate_rolls(
 ) -> Vec<SimResult> {
     (0..sims)
         .map(|_| {
-            let mut rolls: Vec<u8> = (0..dice).map(|_| roll_d6(rng)).collect();
+            // remove retained dice from the dice pool
+            let minus_retained = dice.saturating_sub(weapon_rules.accurate.into());
+
+            // roll and rerolls
+            let mut rolls: Vec<u8> = (0..minus_retained).map(|_| roll_d6(rng)).collect();
             apply_rerolls(&mut rolls, threshold, reroll, rng);
-            classify_rolls(&rolls, threshold, weapon_rules)
+
+            // apply weapon rules to the pool of rolled dice
+            // weapon effects usually shoudln't alter retained dice according to the faq
+            let mut result = classify_rolls(&rolls, threshold, weapon_rules);
+
+            // add retained dice back to the final result
+            result.normals += weapon_rules.accurate as usize;
+            result
         })
         .collect()
 }
@@ -265,6 +287,7 @@ fn print_results(
     println!("  Punishing   : {}", if weapon_rules.punishing { "Yes" } else { "No" });
     println!("  Rending     : {}", if weapon_rules.rending { "Yes" } else { "No" });
     println!("  Severe      : {}", if weapon_rules.severe { "Yes" } else { "No" });
+    println!("  Accurate    : {}", weapon_rules.accurate);
     println!("  Rerolls     : {}", reroll_label);
     println!("  Simulations : {}", format_num(sims));
     println!("{}", "=".repeat(WIDTH));
@@ -392,6 +415,7 @@ fn main() {
         rending: args.rending,
         severe: args.severe,
         lethal: args.lethal,
+        accurate: args.accurate,
     };
 
     let results = simulate_rolls(
@@ -456,7 +480,9 @@ mod tests {
     #[test]
     fn test_classify_no_special() {
         let rolls = vec![1, 1, 2, 4, 6];
-        let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 6};
+
+        let special = WeaponRules::new();
+
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 3,
@@ -470,7 +496,9 @@ mod tests {
     #[test]
     fn test_classify_punishing() {
         let rolls = vec![1, 1, 2, 4, 6];
-        let special = WeaponRules{punishing: true, rending: false, severe: false, lethal: 6};
+
+        let special = WeaponRules{punishing: true, ..WeaponRules::new()};
+
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 2,
@@ -484,7 +512,9 @@ mod tests {
     #[test]
     fn test_classify_rending() {
         let rolls = vec![1, 1, 3, 4, 6];
-        let special = WeaponRules{punishing: false, rending: true, severe: false, lethal: 6};
+
+        let special = WeaponRules{rending: true, ..WeaponRules::new()};
+
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 2,
@@ -498,7 +528,8 @@ mod tests {
     #[test]
     fn test_classify_lethal() {
         let rolls = vec![1, 1, 3, 5, 6];
-        let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 5};
+        let special = WeaponRules{lethal: 5, ..WeaponRules::new()};
+
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 2,
@@ -512,7 +543,9 @@ mod tests {
     #[test]
     fn test_classify_severe() {
         let rolls = vec![1, 1, 3, 5, 5];
-        let special = WeaponRules{punishing: false, rending: false, severe: true, lethal: 6};
+
+        let special = WeaponRules{severe: true, ..WeaponRules::new()};
+
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 2,
@@ -526,7 +559,7 @@ mod tests {
     #[test]
     fn test_classify_severe_with_critical() {
         let rolls = vec![1, 1, 3, 5, 6];
-        let special = WeaponRules{punishing: false, rending: false, severe: true, lethal: 6};
+        let special = WeaponRules{severe: true, ..WeaponRules::new()};
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 2,
@@ -540,7 +573,7 @@ mod tests {
     #[test]
     fn test_classify_severe_rending() {
         let rolls = vec![1, 1, 3, 5, 5];
-        let special = WeaponRules{punishing: false, rending: true, severe: true, lethal: 6};
+        let special = WeaponRules{rending: true, severe: true, ..WeaponRules::new()};
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 2,
@@ -550,11 +583,11 @@ mod tests {
 
         assert!(result.hits() == 3);
     }
-   
+
     #[test]
     fn test_classify_severe_punishing() {
         let rolls = vec![1, 1, 3, 5, 5];
-        let special = WeaponRules{punishing: true, rending: false, severe: true, lethal: 6};
+        let special = WeaponRules{punishing: true, severe: true, ..WeaponRules::new()};
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 2,
@@ -568,7 +601,7 @@ mod tests {
     #[test]
     fn test_classify_lethal_rending() {
         let rolls = vec![1, 3, 3, 5, 5];
-        let special = WeaponRules{punishing: false, rending: true, severe: false, lethal: 5};
+        let special = WeaponRules{rending: true, lethal: 5, ..WeaponRules::new()};
         let result = classify_rolls(&rolls, 3, &special);
         assert_eq!(result, SimResult{
             misses: 1,
@@ -582,13 +615,25 @@ mod tests {
     // [4, 3], [6, 5], [4, 6], [4, 3], [5, 4]
     #[test]
     fn test_simulate_rolls() {
-        let special = WeaponRules{punishing: false, rending: false, severe: false, lethal: 6};
+        let special = WeaponRules::new();
         let result = simulate_rolls(2, 4, &Reroll::None, &special, 5, &mut seeded_rng());
         assert_eq!(result, vec![
             SimResult{ misses: 1, normals: 1, crits: 0, },
             SimResult{ misses: 0, normals: 1, crits: 1, },
             SimResult{ misses: 0, normals: 1, crits: 1, },
             SimResult{ misses: 1, normals: 1, crits: 0, },
+            SimResult{ misses: 0, normals: 2, crits: 0, },
+        ]);
+    }
+
+    #[test]
+    fn test_simulate_rolls_accurate() {
+        // accurate: 2 with only 2 dice means all are retained, none rolled
+        let special = WeaponRules{accurate: 2, ..WeaponRules::new()};
+        let result = simulate_rolls(2, 4, &Reroll::None, &special, 3, &mut seeded_rng());
+        assert_eq!(result, vec![
+            SimResult{ misses: 0, normals: 2, crits: 0, },
+            SimResult{ misses: 0, normals: 2, crits: 0, },
             SimResult{ misses: 0, normals: 2, crits: 0, },
         ]);
     }
