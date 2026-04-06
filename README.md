@@ -33,6 +33,7 @@ ktsim [OPTIONS]
 | `--punishing`   |       | off     | If any critical rolled, convert one miss to a normal hit     |
 | `--rending`     |       | off     | If any critical rolled, convert one normal hit to a critical |
 | `--severe`      |       | off     | If no criticals rolled, convert one normal hit to a critical |
+| `--accurate N`  |       | 0       | Retain N dice as normal hits without rolling them (0–2)      |
 | `--sims N`      | `-s`  | 10,000  | Number of simulations to run                                 |
 | `--output TYPE` | `-o`  | hits    | Output format: `hits` or `full`                              |
 
@@ -47,7 +48,7 @@ ktsim [OPTIONS]
 
 ### Special rules interaction
 
-Punishing, rending, and severe are applied in that order after rerolls. Severe only fires when there are no criticals, so it cannot trigger punishing or rending.
+Punishing, rending, and severe are applied in that order after rerolls. Severe only fires when there are no criticals, so it cannot trigger punishing or rending. Accurate dice are retained before rerolls and are not subject to weapon effects.
 
 ## Output
 
