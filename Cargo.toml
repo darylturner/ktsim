@@ -1,8 +1,8 @@
 [package]
 name = "ktsim"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-rand = "0.8.5"
+rand = "0.10.0"

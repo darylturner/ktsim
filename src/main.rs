@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::collections::HashMap;
 
 const WIDTH: usize = 72;
@@ -125,7 +125,7 @@ impl SimResult {
 }
 
 fn roll_d6(rng: &mut impl Rng) -> u8 {
-    rng.gen_range(1..=6)
+    rng.random_range(1..=6)
 }
 
 fn apply_rerolls(rolls: &mut [u8], hit: u8, reroll: &Reroll, rng: &mut impl Rng) {
@@ -278,10 +278,10 @@ fn print_results(
         Reroll::Relentless => "Relentless (reroll all misses)",
     };
 
-    println!();
-    println!("{}", "=".repeat(WIDTH));
+    // println!();
+    println!("{}", "═".repeat(WIDTH));
     println!("  Kill Team Dice Simulator — Results");
-    println!("{}", "=".repeat(WIDTH));
+    println!("{}", "═".repeat(WIDTH));
     println!("  Attacks     : {}", attacks);
     println!("  Hit         : {}+", hit);
     println!("  Lethal      : {}+ for critical", weapon_rules.lethal);
@@ -291,8 +291,7 @@ fn print_results(
     println!("  Accurate    : {}", weapon_rules.accurate);
     println!("  Rerolls     : {}", reroll_label);
     println!("  Simulations : {}", format_num(sims));
-    println!("{}", "=".repeat(WIDTH));
-    println!();
+    println!("{}", "═".repeat(WIDTH));
     println!("  Mean hits   : {:.3}  ({:.3} normal + {:.3} crit)", mean_hits, mean_normals, mean_crits);
     println!("  Mean misses : {:.3}", mean_misses);
     println!("  Median hits : {}", median);
@@ -317,7 +316,6 @@ fn print_hits_table(
 ) {
     let max_count = *hit_counts.values().max().unwrap_or(&1);
 
-    println!();
     println!("{}", "─".repeat(WIDTH));
     println!(
         "  {:<6} {:<9} {:>6}   {:>6}   {}",
@@ -368,7 +366,6 @@ fn print_breakdown_table(
 
     let max_count = combos.iter().map(|&(_, c)| c).max().unwrap_or(1);
 
-    println!();
     println!("{}", "─".repeat(WIDTH));
     println!(
         "  {:<5} {:<6} {:<8} {:<8} {:<9} {:>6}   {:>6}   {}",
@@ -425,7 +422,7 @@ fn main() {
         &args.reroll,
         &weapon_rules,
         args.sims,
-        &mut rand::thread_rng(),
+        &mut rand::rng(),
     );
 
     print_results(
