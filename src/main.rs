@@ -296,7 +296,7 @@ fn print_results(
     println!("  Mean hits   : {:.3}  ({:.3} normal + {:.3} crit)", mean_hits, mean_normals, mean_crits);
     println!("  Mean misses : {:.3}", mean_misses);
     println!("  Median hits : {}", median);
-    println!("  Std dev     : {:.3}", std_dev);
+    println!("  Std dev     : {:.3} [{:.3}, {:.3}]", std_dev, (mean_hits-std_dev).max(0.0), mean_hits+std_dev);
     println!("  Range       : {} – {}", sorted_hits.first().unwrap(), sorted_hits.last().unwrap());
 
     match output {
