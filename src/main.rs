@@ -111,14 +111,83 @@ impl WeaponRules {
     }
 }
 
-#[derive(Debug, PartialEq)]
-struct SimResult {
+#[derive(Debug, PartialEq, Copy, Clone)]
+struct RollResult {
     misses: usize,
     normals: usize,
     crits: usize,
 }
 
-impl SimResult {
+impl RollResult {
+    // apply special rules respecting which rules retain dice, and which can and
+    // cannot change retained results..
+    fn apply_special_rules(&self, weapon_rules: &WeaponRules) -> Retained {
+        // our rolled dice are in the conceptual dice tray, these are not yet retained
+        let mut dice_tray = self.clone();
+
+        // retained is where we've taken the dice of out the tray
+        let mut retained = Retained{
+            misses: 0,
+            normals: weapon_rules.accurate as usize,
+            crits: 0,
+        };
+
+        // retain criticals to trigger our crit activated specials
+        if dice_tray.crits >= 1 {
+            retained.crits = dice_tray.crits;
+            dice_tray.crits = 0;
+
+            // punishing: if any retained criticals, retain a miss as a normal
+            if weapon_rules.punishing && retained.crits >= 1 && dice_tray.misses >= 1 {
+                dice_tray.misses -= 1;
+                retained.normals += 1;
+            }
+
+            // rending: if any retained criticals, retain a normal as critical
+            if weapon_rules.rending && retained.crits >= 1 && dice_tray.normals >= 1 {
+                dice_tray.normals -= 1;
+                retained.crits += 1;
+            }
+        }
+
+        // retain any leftover normal hits
+        if dice_tray.normals >= 1 {
+            retained.normals += dice_tray.normals;
+            dice_tray.normals = 0;
+        }
+
+        // severe: if you don't retain any criticals we may change one of our (retained)
+        // normals to a critical success
+        if weapon_rules.severe && retained.crits == 0 && retained.normals >= 1 {
+            retained.normals -= 1;
+            retained.crits += 1;
+        }
+
+        // discard any misses
+        if dice_tray.misses >= 1 {
+            retained.misses = dice_tray.misses;
+            dice_tray.misses = 0;
+        }
+
+        // dice tray should be empty at this point
+        assert!(
+            dice_tray.misses == 0 &&
+            dice_tray.normals == 0 &&
+            dice_tray.crits == 0
+        );
+
+        retained
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct Retained {
+    misses: usize,
+    normals: usize,
+    crits: usize,
+}
+
+impl Retained {
     fn hits(&self) -> usize {
         self.normals + self.crits
     }
@@ -171,7 +240,7 @@ fn apply_rerolls(rolls: &mut [u8], hit: u8, reroll: &Reroll, rng: &mut impl Rng)
     }
 }
 
-fn classify_rolls(rolls: &[u8], hit: u8, weapon_rules: &WeaponRules) -> SimResult {
+fn classify_rolls(rolls: &[u8], hit: u8, weapon_rules: &WeaponRules) -> RollResult {
         let mut misses = 0;
         let mut normals = 0;
         let mut crits = 0;
@@ -186,28 +255,13 @@ fn classify_rolls(rolls: &[u8], hit: u8, weapon_rules: &WeaponRules) -> SimResul
             }
         }
 
-        // punishing: crit converts a miss to a normal
-        if weapon_rules.punishing && crits >= 1 && misses >= 1 {
-            misses -= 1;
-            normals += 1;
-        }
-        // rending: crit converts a normal to a crit
-        if weapon_rules.rending && crits >= 1 && normals >= 1 {
-            normals -= 1;
-            crits += 1;
-        }
-        // severe: no crits converts a normal to a crit (cannot trigger punishing or rending)
-        if weapon_rules.severe && crits == 0 && normals >= 1 {
-            normals -= 1;
-            crits += 1;
-        }
-
-        SimResult {
+        RollResult {
             misses,
             normals,
             crits,
         }
 }
+
 
 // simresult struct is 24 bytes so expect 24xsim bytes for memory usage
 // 10m simulations seems on the high side here so 240mB for the vec<simresult>
@@ -218,29 +272,25 @@ fn simulate_rolls(
     weapon_rules: &WeaponRules,
     sims: usize,
     rng: &mut impl Rng,
-) -> Vec<SimResult> {
+) -> Vec<Retained> {
     (0..sims)
         .map(|_| {
-            // remove retained dice from the dice pool
+            // remove dice from the dice pool and retain them
             let minus_retained = attacks.saturating_sub(weapon_rules.accurate.into());
 
             // roll and rerolls
             let mut rolls: Vec<u8> = (0..minus_retained).map(|_| roll_d6(rng)).collect();
             apply_rerolls(&mut rolls, hit, reroll, rng);
 
-            // apply weapon rules to the pool of rolled dice
-            // weapon effects usually shoudln't alter retained dice according to the faq
-            let mut result = classify_rolls(&rolls, hit, weapon_rules);
-
-            // add retained dice back to the final result
-            result.normals += weapon_rules.accurate as usize;
-            result
+            // apply special rules
+            let result = classify_rolls(&rolls, hit, weapon_rules);
+            result.apply_special_rules(weapon_rules)
         })
         .collect()
 }
 
 fn print_results(
-    results: &[SimResult],
+    results: &[Retained],
     attacks: usize,
     hit: u8,
     reroll: &Reroll,
@@ -278,7 +328,6 @@ fn print_results(
         Reroll::Relentless => "Relentless (reroll all misses)",
     };
 
-    // println!();
     println!("{}", "═".repeat(WIDTH));
     println!("  Kill Team Dice Simulator — Results");
     println!("{}", "═".repeat(WIDTH));
@@ -347,7 +396,7 @@ fn print_hits_table(
 }
 
 fn print_breakdown_table(
-    results: &[SimResult],
+    results: &[Retained],
     attacks: usize,
     hit_counts: &HashMap<usize, usize>,
     total: f64,
@@ -476,51 +525,17 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_no_special() {
+    fn test_classify() {
         let rolls = vec![1, 1, 2, 4, 6];
 
         let special = WeaponRules::new();
 
         let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
+        assert_eq!(result, RollResult{
             misses: 3,
             normals: 1,
             crits: 1,
         });
-
-        assert!(result.hits() == 2);
-    }
-
-    #[test]
-    fn test_classify_punishing() {
-        let rolls = vec![1, 1, 2, 4, 6];
-
-        let special = WeaponRules{punishing: true, ..WeaponRules::new()};
-
-        let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
-            misses: 2,
-            normals: 2,
-            crits: 1,
-        });
-
-        assert!(result.hits() == 3);
-    }
-
-    #[test]
-    fn test_classify_rending() {
-        let rolls = vec![1, 1, 3, 4, 6];
-
-        let special = WeaponRules{rending: true, ..WeaponRules::new()};
-
-        let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
-            misses: 2,
-            normals: 1,
-            crits: 2,
-        });
-
-        assert!(result.hits() == 3);
     }
 
     #[test]
@@ -529,37 +544,148 @@ mod tests {
         let special = WeaponRules{lethal: 5, ..WeaponRules::new()};
 
         let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
+        assert_eq!(result, RollResult{
             misses: 2,
             normals: 1,
             crits: 2,
         });
+    }
+
+    #[test]
+    fn test_punishing() {
+        let rolls = RollResult{
+            misses: 3,
+            normals: 1,
+            crits: 1,
+        };
+
+        let special = WeaponRules{punishing: true, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 2,
+            normals: 2,
+            crits: 1,
+        });
 
         assert!(result.hits() == 3);
     }
 
     #[test]
-    fn test_classify_severe() {
-        let rolls = vec![1, 1, 3, 5, 5];
+    fn test_accurate() {
+        let rolls = RollResult{
+            misses: 2,
+            normals: 1, // +2 retained
+            crits: 1,
+        };
+
+        let special = WeaponRules{accurate: 2, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 2,
+            normals: 3,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 4);
+    }
+
+    #[test]
+    fn test_rending() {
+        let rolls = RollResult{
+            misses: 3,
+            normals: 1,
+            crits: 1,
+        };
+
+        let special = WeaponRules{rending: true, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 3,
+            normals: 0,
+            crits: 2,
+        });
+
+        assert!(result.hits() == 2);
+    }
+
+    #[test]
+    fn test_rending_punishing() {
+        // should not both trigger as can only retain once
+        let rolls = RollResult{
+            misses: 3,
+            normals: 0,
+            crits: 1,
+        };
+
+        let special = WeaponRules{rending: true, punishing: true, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 2,
+            normals: 1,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 2);
+    }
+
+    #[test]
+    fn test_rending_accurate() {
+        // should not both trigger as can only retain once
+        // attacks 4, accurate 1 (retained)
+        let rolls = RollResult{
+            misses: 2,
+            normals: 0,
+            crits: 1,
+        };
+
+        let special = WeaponRules{rending: true, accurate: 1, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 2,
+            normals: 1,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 2);
+    }
+
+    #[test]
+    fn test_severe() {
+        let rolls = RollResult{
+            misses: 2,
+            normals: 2,
+            crits: 0,
+        };
 
         let special = WeaponRules{severe: true, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
 
-        let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
+        assert_eq!(result, Retained{
             misses: 2,
-            normals: 2,
+            normals: 1,
             crits: 1,
         });
 
-        assert!(result.hits() == 3);
+        assert!(result.hits() == 2);
     }
 
     #[test]
-    fn test_classify_severe_with_critical() {
-        let rolls = vec![1, 1, 3, 5, 6];
+    fn test_severe_with_critical() {
+        let rolls = RollResult{
+            misses: 2,
+            normals: 2,
+            crits: 1,
+        };
+
         let special = WeaponRules{severe: true, ..WeaponRules::new()};
-        let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
             misses: 2,
             normals: 2,
             crits: 1,
@@ -569,39 +695,75 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_severe_rending() {
-        let rolls = vec![1, 1, 3, 5, 5];
-        let special = WeaponRules{rending: true, severe: true, ..WeaponRules::new()};
-        let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
+    fn test_severe_rending() {
+        let rolls = RollResult{
             misses: 2,
             normals: 2,
+            crits: 0,
+        };
+
+        let special = WeaponRules{severe: true, rending: true, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 2,
+            normals: 1,
             crits: 1,
         });
 
-        assert!(result.hits() == 3);
+        assert!(result.hits() == 2);
     }
 
     #[test]
-    fn test_classify_severe_punishing() {
-        let rolls = vec![1, 1, 3, 5, 5];
-        let special = WeaponRules{punishing: true, severe: true, ..WeaponRules::new()};
-        let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
+    fn test_severe_punishing() {
+        let rolls = RollResult{
             misses: 2,
             normals: 2,
+            crits: 0,
+        };
+
+        let special = WeaponRules{severe: true, punishing: true, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 2,
+            normals: 1,
             crits: 1,
         });
 
-        assert!(result.hits() == 3);
+        assert!(result.hits() == 2);
     }
 
     #[test]
-    fn test_classify_lethal_rending() {
-        let rolls = vec![1, 3, 3, 5, 5];
+    fn test_severe_accurate() {
+        let rolls = RollResult{
+            misses: 2,
+            normals: 0, // +2 retained
+            crits: 0,
+        };
+
+        let special = WeaponRules{severe: true, accurate: 2, ..WeaponRules::new()};
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
+            misses: 2,
+            normals: 1,
+            crits: 1,
+        });
+
+        assert!(result.hits() == 2);
+    }
+
+    #[test]
+    fn test_lethal_rending() {
+        let raw_rolls = vec![1, 3, 3, 5, 5];
+
         let special = WeaponRules{rending: true, lethal: 5, ..WeaponRules::new()};
-        let result = classify_rolls(&rolls, 3, &special);
-        assert_eq!(result, SimResult{
+        let rolls = classify_rolls(&raw_rolls, 3, &special);
+
+        let result = rolls.apply_special_rules(&special);
+
+        assert_eq!(result, Retained{
             misses: 1,
             normals: 1,
             crits: 3,
@@ -616,23 +778,11 @@ mod tests {
         let special = WeaponRules::new();
         let result = simulate_rolls(2, 4, &Reroll::None, &special, 5, &mut seeded_rng());
         assert_eq!(result, vec![
-            SimResult{ misses: 1, normals: 1, crits: 0, },
-            SimResult{ misses: 0, normals: 1, crits: 1, },
-            SimResult{ misses: 0, normals: 1, crits: 1, },
-            SimResult{ misses: 1, normals: 1, crits: 0, },
-            SimResult{ misses: 0, normals: 2, crits: 0, },
-        ]);
-    }
-
-    #[test]
-    fn test_simulate_rolls_accurate() {
-        // accurate: 2 with only 2 dice means all are retained, none rolled
-        let special = WeaponRules{accurate: 2, ..WeaponRules::new()};
-        let result = simulate_rolls(2, 4, &Reroll::None, &special, 3, &mut seeded_rng());
-        assert_eq!(result, vec![
-            SimResult{ misses: 0, normals: 2, crits: 0, },
-            SimResult{ misses: 0, normals: 2, crits: 0, },
-            SimResult{ misses: 0, normals: 2, crits: 0, },
+            Retained{ misses: 1, normals: 1, crits: 0, },
+            Retained{ misses: 0, normals: 1, crits: 1, },
+            Retained{ misses: 0, normals: 1, crits: 1, },
+            Retained{ misses: 1, normals: 1, crits: 0, },
+            Retained{ misses: 0, normals: 2, crits: 0, },
         ]);
     }
 }
