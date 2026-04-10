@@ -46,10 +46,6 @@ ktsim [OPTIONS]
 | `ceaseless`  | Reroll all misses sharing the most frequent missed value |
 | `relentless` | Reroll all misses                                        |
 
-### Special rules interaction
-
-Punishing, rending, and severe are applied in that order after rerolls. Severe only fires when there are no criticals, so it cannot trigger punishing or rending. Accurate dice are retained before rolls/rerolls and cannot be altered by weapon effects.
-
 ## Output
 
 ### `--output hits` (default)
