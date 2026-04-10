@@ -465,6 +465,11 @@ fn main() {
         accurate: args.accurate,
     };
 
+    if args.attacks < weapon_rules.accurate as usize {
+        eprintln!("attacks cannot be fewer than dice retained by accurate");
+        std::process::exit(1);
+    }
+
     let results = simulate_rolls(
         args.attacks,
         args.hit,
