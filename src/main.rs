@@ -1,6 +1,7 @@
 use clap::{Parser, ValueEnum};
 use rand::{Rng, RngExt};
 use std::collections::HashMap;
+use std::mem::take;
 
 const WIDTH: usize = 72;
 const BAR_WIDTH_HITS: usize = 28;
@@ -125,9 +126,9 @@ struct RollResult {
 }
 
 impl RollResult {
-    // apply special rules respecting which rules retain dice, and which can and
+    // apply weapon rules respecting which rules retain dice, and which can and
     // cannot change retained results..
-    fn apply_special_rules(&self, weapon_rules: &WeaponRules) -> Retained {
+    fn apply_weapon_rules(&self, weapon_rules: &WeaponRules) -> Retained {
         // our rolled dice are in the conceptual dice tray, these are not yet retained
         let mut dice_tray = self.clone();
 
@@ -138,10 +139,9 @@ impl RollResult {
             crits: 0,
         };
 
-        // retain criticals to trigger our crit activated specials
+        // retain criticals to trigger our crit activated weapon rules
         if dice_tray.crits >= 1 {
-            retained.crits = dice_tray.crits;
-            dice_tray.crits = 0;
+            retained.crits = take(&mut dice_tray.crits);
 
             // punishing: if any retained criticals, retain a miss as a normal
             if weapon_rules.punishing && retained.crits >= 1 && dice_tray.misses >= 1 {
@@ -158,8 +158,7 @@ impl RollResult {
 
         // retain any leftover normal hits
         if dice_tray.normals >= 1 {
-            retained.normals += dice_tray.normals;
-            dice_tray.normals = 0;
+            retained.normals += take(&mut dice_tray.normals);
         }
 
         // severe: if no retained criticals, change a (retained) normal to a critical
@@ -170,8 +169,7 @@ impl RollResult {
 
         // discard any misses
         if dice_tray.misses >= 1 {
-            retained.misses = dice_tray.misses;
-            dice_tray.misses = 0;
+            retained.misses = take(&mut dice_tray.misses);
         }
 
         // dice tray should be empty at this point
@@ -282,9 +280,9 @@ fn simulate_rolls(
             let mut rolls: Vec<u8> = (0..minus_retained).map(|_| roll_d6(rng)).collect();
             apply_rerolls(&mut rolls, hit, reroll, rng);
 
-            // apply special rules
+            // apply weapon rules
             let result = classify_rolls(&rolls, hit, weapon_rules);
-            result.apply_special_rules(weapon_rules)
+            result.apply_weapon_rules(weapon_rules)
         })
         .collect()
 }
@@ -549,9 +547,9 @@ mod tests {
     fn test_classify() {
         let rolls = vec![1, 1, 2, 4, 6];
 
-        let special = WeaponRules::new();
+        let rules = WeaponRules::new();
 
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, &rules);
         assert_eq!(
             result,
             RollResult {
@@ -565,12 +563,12 @@ mod tests {
     #[test]
     fn test_classify_lethal() {
         let rolls = vec![1, 1, 3, 5, 6];
-        let special = WeaponRules {
+        let rules = WeaponRules {
             lethal: 5,
             ..WeaponRules::new()
         };
 
-        let result = classify_rolls(&rolls, 3, &special);
+        let result = classify_rolls(&rolls, 3, &rules);
         assert_eq!(
             result,
             RollResult {
@@ -589,11 +587,11 @@ mod tests {
             crits: 1,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             punishing: true,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -615,11 +613,11 @@ mod tests {
             crits: 1,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             accurate: 2,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -641,11 +639,11 @@ mod tests {
             crits: 1,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             rending: true,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -668,12 +666,12 @@ mod tests {
             crits: 1,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             rending: true,
             punishing: true,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -697,12 +695,12 @@ mod tests {
             crits: 1,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             rending: true,
             accurate: 1,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -724,11 +722,11 @@ mod tests {
             crits: 0,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             severe: true,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -750,11 +748,11 @@ mod tests {
             crits: 1,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             severe: true,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -776,12 +774,12 @@ mod tests {
             crits: 0,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             severe: true,
             rending: true,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -803,12 +801,12 @@ mod tests {
             crits: 0,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             severe: true,
             punishing: true,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -830,12 +828,12 @@ mod tests {
             crits: 0,
         };
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             severe: true,
             accurate: 2,
             ..WeaponRules::new()
         };
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -853,14 +851,14 @@ mod tests {
     fn test_lethal_rending() {
         let raw_rolls = vec![1, 3, 3, 5, 5];
 
-        let special = WeaponRules {
+        let rules = WeaponRules {
             rending: true,
             lethal: 5,
             ..WeaponRules::new()
         };
-        let rolls = classify_rolls(&raw_rolls, 3, &special);
+        let rolls = classify_rolls(&raw_rolls, 3, &rules);
 
-        let result = rolls.apply_special_rules(&special);
+        let result = rolls.apply_weapon_rules(&rules);
 
         assert_eq!(
             result,
@@ -877,8 +875,8 @@ mod tests {
     // [4, 3], [6, 5], [4, 6], [4, 3], [5, 4]
     #[test]
     fn test_simulate_rolls() {
-        let special = WeaponRules::new();
-        let result = simulate_rolls(2, 4, &Reroll::None, &special, 5, &mut seeded_rng());
+        let rules = WeaponRules::new();
+        let result = simulate_rolls(2, 4, &Reroll::None, &rules, 5, &mut seeded_rng());
         assert_eq!(
             result,
             vec![
