@@ -48,23 +48,23 @@ struct Args {
     #[arg(short, long, value_enum, default_value_t = Reroll::None)]
     reroll: Reroll,
 
-    /// Lethal threshold — roll this value or higher for a critical hit (default: 6)
+    /// Lethal threshold — roll this value or higher for a critical success (default: 6)
     #[arg(short, long, default_value_t = 6, value_parser = clap::value_parser!(u8).range(2..=6))]
     lethal: u8,
 
-    /// Punishing: if at least one critical is rolled, convert one miss to a normal hit
+    /// Punishing: if at least one critical is retained, retain a miss as a normal success
     #[arg(long, default_value_t = false)]
     punishing: bool,
 
-    /// Rending: if at least one critical is rolled, convert one normal hit to a critical
+    /// Rending: if at least one critical is retained, retain a normal success as a critical success
     #[arg(long, default_value_t = false)]
     rending: bool,
 
-    /// Severe: if no criticals are rolled, convert one normal hit to a critical (cannot trigger punishing or rending)
+    /// Severe: if no criticals are retained, change a normal success to a critical success
     #[arg(long, default_value_t = false)]
     severe: bool,
 
-    /// Accurate: remove N dice from the rolled pool to retain as normal success
+    /// Accurate: retain N dice as normal successes without rolling them
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=2))]
     accurate: u8,
 
