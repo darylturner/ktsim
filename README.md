@@ -20,6 +20,17 @@ Download the pre-built binary for your platform from the [releases page](https:/
 - `ktsim-x86_64-linux` — Linux x86-64
 - `ktsim-x86_64-windows.exe` — Windows x86-64
 
+**Windows:** Open PowerShell from the Start menu, navigate to the folder you downloaded the file to, and run it:
+
+```
+cd ~\Downloads
+.\ktsim-x86_64-windows.exe --help
+```
+
+To run `ktsim` from any directory, rename it to `ktsim.exe`, place it in a folder of your choice, and add that folder to your PATH.
+
+[How to edit system path](https://www.howtogeek.com/118594/how-to-edit-your-system-path-for-easy-command-line-access/)
+
 ### From source
 
 Requires a Rust toolchain from [rustup.rs](https://rustup.rs).
