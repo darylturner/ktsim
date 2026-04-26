@@ -2,9 +2,27 @@
 
 Monte Carlo dice simulator for Kill Team attack rolls.
 
-Simulates rolling a pool of d6s against a hit threshold, with support for reroll abilities, critical hit rules, and special weapon traits. Run thousands of simulations to see the full probability distribution of outcomes.
+Simulates rolling a pool of d6s against a hit threshold, with support for reroll abilities, critical hit rules, and special weapon traits. Run thousands of simulations to see the full likelihood of outcomes.
 
 ## Install
+
+### macOS
+
+```
+brew tap darylturner/ktsim
+brew install ktsim
+```
+
+### Windows and Linux
+
+Download the pre-built binary for your platform from the [releases page](https://github.com/darylturner/ktsim/releases):
+
+- `ktsim-x86_64-linux` — Linux x86-64
+- `ktsim-x86_64-windows.exe` — Windows x86-64
+
+### From source
+
+Requires a Rust toolchain from [rustup.rs](https://rustup.rs).
 
 ```
 cargo install --git https://github.com/darylturner/ktsim
